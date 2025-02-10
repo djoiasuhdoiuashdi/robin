@@ -1,7 +1,8 @@
-numpy==1.22.0
-alt_model_checkpoint==1.0.1
-opencv-python>=4.2.0.32
-Keras==2.2.4
-imageio==2.4.1
-Augmentor==0.2.3
-Pillow>=7.1.0
+keras~=2.11.0
+opencv-python~=4.11.0.86
+numpy~=1.19.5
+augmentor~=0.2.3
+pillow~=9.5.0
+imageio~=2.4.1
+tensorflow~=2.11.0
+wandb~=0.18.7

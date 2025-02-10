@@ -4,7 +4,7 @@ import argparse
 import glob
 import time
 
-from keras.optimizers import Adam
+from tensorflow.keras.optimizers import Adam
 
 from model.unet import unet
 from utils.img_processing import *
@@ -27,7 +27,7 @@ def parse_args():
                         help=r'directory with input images (default: "%(default)s")')
     parser.add_argument('-o', '--output', type=str, default=os.path.join('.', 'output'),
                         help=r'directory for output images (default: "%(default)s")')
-    parser.add_argument('-w', '--weights', type=str, default=os.path.join('.', 'bin_weights.hdf5'),
+    parser.add_argument('-w', '--weights', type=str, default="./weights",
                         help=r'path to U-net weights (default: "%(default)s")')
     parser.add_argument('-b', '--batchsize', type=int, default=20,
                         help=r'number of images, simultaneously sent to the GPU (default: %(default)s)')
@@ -41,17 +41,19 @@ def main():
 
     args = parse_args()
 
-    fnames_in = list(glob.iglob(os.path.join(args.input, '**', '*_in.*'), recursive=True))
+    fnames_in = list(glob.iglob(os.path.join(args.input, '**', '*.*'), recursive=True))
     model = None
     if len(fnames_in) != 0:
         mkdir_s(args.output)
         model = unet()
-        model.compile(optimizer=Adam(lr=1e-4), loss='binary_crossentropy', metrics=['accuracy'])
-        model.load_weights(args.weights)
+        model.compile(optimizer=Adam(learning_rate=1e-4), loss='binary_crossentropy', metrics=['accuracy'])
+        model.load_weights(os.path.join(args.weights, "bin.weights.h5"))
     for fname in fnames_in:
         img = cv2.imread(fname, cv2.IMREAD_GRAYSCALE).astype(np.float32)
         img = binarize_img(img, model, args.batchsize)
-        cv2.imwrite(os.path.join(args.output, os.path.split(fname)[-1].replace('_in', '_out')), img)
+        file_path = os.path.join(args.output, os.path.basename(fname).replace(".bmp", ".png"))
+        print(f"Filepath: {file_path}")
+        cv2.imwrite(file_path, img)
 
     print("finished in {0:.2f} seconds".format(time.time() - start_time))
 

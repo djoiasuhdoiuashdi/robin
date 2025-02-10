@@ -5,20 +5,19 @@ import random
 import sys
 import time
 from copy import deepcopy
-
 import Augmentor
 import PIL
 import imageio
 from Augmentor.Operations import Operation
 from PIL import Image
-from alt_model_checkpoint import AltModelCheckpoint
-from keras import backend as K
-from keras.callbacks import (TensorBoard, Callback)
-from keras.optimizers import Adam
-from keras.utils import (multi_gpu_model, Sequence)
-
+from tensorflow.keras import backend as K
+from tensorflow.keras.callbacks import (TensorBoard, Callback,ModelCheckpoint)
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.utils import Sequence
+import tensorflow as tf
 from model.unet import unet
 from utils.img_processing import *
+import wandb
 
 
 class GaussianNoiseAugmentor(Operation):
@@ -105,7 +104,8 @@ class InvertPartAugmentor(Operation):
 class ParallelDataGenerator(Sequence):
     """Generate images for training/validation/testing (parallel version)."""
 
-    def __init__(self, fnames_in, fnames_gt, batch_size: int, augmentate: bool):
+    def __init__(self, fnames_in, fnames_gt, batch_size: int, augmentate: bool, **kwargs):
+        super().__init__(**kwargs)
         self.fnames_in = deepcopy(fnames_in)
         self.fnames_gt = deepcopy(fnames_gt)
         self.batch_size = batch_size
@@ -248,16 +248,14 @@ def create_callbacks(model, original_model, args):
 
     # Model checkpoint.
     if args.gpus == 1:
-        model_checkpoint = AltModelCheckpoint(args.weights if args.debug == ''
-                                              else os.path.join(args.debug, 'weights',
-                                                                'weights-improvement-{epoch:02d}.hdf5'),
-                                              model, monitor='val_dice_coef', mode='max', verbose=1,
+        model_checkpoint = ModelCheckpoint(filepath=os.path.join(args.weights,
+                                                                'weights-improvement-{epoch:02d}.weights.h5'),
+                                             monitor='val_dice_coef', mode='max', verbose=1,
                                               save_best_only=True, save_weights_only=True)
     else:
-        model_checkpoint = AltModelCheckpoint(args.weights if args.debug == ''
-                                              else os.path.join(args.debug, 'weights',
-                                                                'weights-improvement-{epoch:02d}.hdf5'),
-                                              original_model, monitor='val_dice_coef', mode='max', verbose=1,
+        model_checkpoint = ModelCheckpoint(filepath=os.path.join(args.weights,
+                                                                'weights-improvement-{epoch:02d}.weights.h5'),
+                                              monitor='val_dice_coef', mode='max', verbose=1,
                                               save_best_only=True, save_weights_only=True)
     callbacks.append(model_checkpoint)
 
@@ -280,6 +278,8 @@ def create_callbacks(model, original_model, args):
                                             save_best_epochs_only=True, mode='max')
         callbacks.append(model_visualisation)
 
+    # callbacks.append(WandbCallback())
+
     return callbacks
 
 
@@ -290,12 +290,12 @@ def dice_coef(y_true, y_pred):
     intersection = K.sum(y_true_f * y_pred_f)
     return (2.0 * intersection + 1.0) / (K.sum(y_true_f) + K.sum(y_pred_f) + 1.0)
 
-
+@tf.autograph.experimental.do_not_convert
 def dice_coef_loss(y_true, y_pred):
     """Count loss of Sorensen-Dice coefficient for output and ground-truth image."""
     return 1 - dice_coef(y_true, y_pred)
 
-
+@tf.autograph.experimental.do_not_convert
 def jacard_coef(y_true, y_pred):
     """Count Jaccard coefficient for output and ground-truth image."""
     y_true_f = K.flatten(y_true)
@@ -337,18 +337,10 @@ def parse_args():
     parser.add_argument('-a', '--augmentate', action='store_true',
                         help=r'use Keras data augmentation')
 
-    # training/validation/testing percents.
-    parser.add_argument('--train', type=int, default=80,
-                        help=r'%% of train images (default: %(default)s%%)')
-    parser.add_argument('--val', type=int, default=10,
-                        help=r'%% of validation images (default: %(default)s%%)')
-    parser.add_argument('--test', type=int, default=10,
-                        help=r'%% of test images (default: %(default)s%%)')
-
     # paths.
     parser.add_argument('-i', '--input', type=str, default=os.path.join('.', 'input'),
                         help=r'directory with input train and ground-truth images (default: "%(default)s")')
-    parser.add_argument('-w', '--weights', type=str, default=os.path.join('.', 'bin_weights.hdf5'),
+    parser.add_argument('-w', '--weights', type=str, default="./weights",
                         help=r'output U-net weights file (default: "%(default)s")')
 
     # Additional callbacks.
@@ -370,10 +362,6 @@ def parse_args():
     assert (args.epochs > 0)
     assert (args.batchsize > 0)
 
-    assert (args.train >= 0)
-    assert (args.val >= 0)
-    assert (args.test >= 0)
-
     assert (args.gpus >= 1)
     assert (args.extraprocesses >= 0)
     assert (args.queuesize >= 0)
@@ -386,99 +374,59 @@ def main():
     args = parse_args()
     np.random.seed()
 
+    wandb.init(
+        project="robin",
+        config={
+        "learning_rate": 1e-4
+        }
+    )
+
     # Creating data for training, validation and testing.
     fnames_in = [os.path.join(args.input, 'in', str(i) + '_in.png')
                  for i in range(len(os.listdir(os.path.join(args.input, 'in'))))]
     fnames_gt = [os.path.join(args.input, 'gt', str(i) + '_gt.png')
                  for i in range(len(os.listdir(os.path.join(args.input, 'gt'))))]
     assert (len(fnames_in) == len(fnames_gt))
-    n = len(fnames_in)
 
-    train_start = 0
+    train_generator = ParallelDataGenerator(
+        fnames_in,
+        fnames_gt,
+        args.batchsize,
+        args.augmentate,
+        workers=args.extraprocesses,
+        max_queue_size=args.queuesize,
+        use_multiprocessing=True
+    )
 
-    train_stop = int(n * (args.train / 100))
-    train_in = fnames_in[train_start:train_stop]
-    train_gt = fnames_gt[train_start:train_stop]
-    train_generator = ParallelDataGenerator(train_in, train_gt, args.batchsize, args.augmentate)
+    validation_in = [os.path.join("validation_patches", 'in', str(i) + '_in.png')
+                 for i in range(len(os.listdir(os.path.join("validation_patches", 'in'))))]
+    validation_gt = [os.path.join("validation_patches", 'in', str(i) + '_in.png')
+                 for i in range(len(os.listdir(os.path.join("validation_patches", 'in'))))]
+    validation_generator = ParallelDataGenerator(validation_in, validation_gt, args.batchsize, args.augmentate,
+        workers=args.extraprocesses,
+        max_queue_size=args.queuesize,
+        use_multiprocessing=True)
 
-    validation_start = train_stop
-    validation_stop = validation_start + int(n * (args.val / 100))
-    validation_in = fnames_in[validation_start:validation_stop]
-    validation_gt = fnames_gt[validation_start:validation_stop]
-    validation_generator = ParallelDataGenerator(validation_in, validation_gt, args.batchsize, args.augmentate)
-
-    test_start = validation_stop
-    test_stop = n
-    test_in = fnames_in[test_start:test_stop]
-    test_gt = fnames_gt[test_start:test_stop]
-    test_generator = ParallelDataGenerator(test_in, test_gt, args.batchsize, args.augmentate)
-
-    # Creating model.
     original_model = unet()
-    if args.gpus == 1:
-        model = original_model
-        model.compile(optimizer=Adam(lr=1e-4), loss=dice_coef_loss,
-                      metrics=[dice_coef, jacard_coef, 'accuracy'])
-    else:
-        model = multi_gpu_model(original_model, gpus=args.gpus)
-        model.compile(optimizer=Adam(lr=1e-4), loss=dice_coef_loss,
-                      metrics=[dice_coef, jacard_coef, 'accuracy'])
+    strategy = tf.distribute.MirroredStrategy()
+    with strategy.scope():
+        model = unet()
+        model.compile(optimizer=Adam(learning_rate=1e-4), loss=dice_coef_loss, metrics=[dice_coef, jacard_coef, 'accuracy'])
     callbacks = create_callbacks(model, original_model, args)
 
-    # Running training, validation and testing.
-    if args.extraprocesses == 0:
-        model.fit_generator(
-            generator=train_generator,
-            steps_per_epoch=train_generator.__len__(),  # Compatibility with old Keras versions.
-            validation_data=validation_generator,
-            validation_steps=validation_generator.__len__(),  # Compatibility with old Keras versions. 
-            epochs=args.epochs,
-            shuffle=True,
-            callbacks=callbacks,
-            use_multiprocessing=False,
-            workers=0,
-            max_queue_size=args.queuesize,
-            verbose=1
-        )
-        metrics = model.evaluate_generator(
-            generator=test_generator,
-            use_multiprocessing=False,
-            workers=0,
-            max_queue_size=args.queuesize,
-            verbose=1
-        )
-    else:
-        model.fit_generator(
-            generator=train_generator,
-            steps_per_epoch=train_generator.__len__(),  # Compatibility with old Keras versions.
-            validation_data=validation_generator,
-            validation_steps=validation_generator.__len__(),  # Compatibility with old Keras versions.
-            epochs=args.epochs,
-            shuffle=True,
-            callbacks=callbacks,
-            use_multiprocessing=True,
-            workers=args.extraprocesses,
-            max_queue_size=args.queuesize,
-            verbose=1
-        )
-        metrics = model.evaluate_generator(
-            generator=test_generator,
-            use_multiprocessing=True,
-            workers=args.extraprocesses,
-            max_queue_size=args.queuesize,
-            verbose=1
-        )
-
-    print()
-    print('total:')
-    print('test_loss:       {0:.4f}'.format(metrics[0]))
-    print('test_dice_coef:  {0:.4f}'.format(metrics[1]))
-    print('test_jacar_coef: {0:.4f}'.format(metrics[2]))
-    print('test_accuracy:   {0:.4f}'.format(metrics[3]))
+    model.fit(
+        x=train_generator,
+        steps_per_epoch= len(train_generator),
+        validation_data=validation_generator,
+        validation_steps=len(validation_generator),
+        epochs = args.epochs,
+        shuffle=True,
+        callbacks=callbacks,
+    )
 
     # Saving model.
     if args.debug != '':
-        model.save_weights(args.weights)
+        model.save_weights(os.path.join(args.weights, "bin.weights.h5"))
     print("finished in {0:.2f} seconds".format(time.time() - start_time))
     # Sometimes script freezes.
     sys.exit(0)
@@ -486,3 +434,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# TODO:
+# Add Wandb Logging
+# Remove Any Errors
