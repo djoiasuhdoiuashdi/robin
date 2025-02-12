@@ -8,6 +8,7 @@ from copy import deepcopy
 import Augmentor
 import PIL
 import imageio
+import keras.callbacks
 from Augmentor.Operations import Operation
 from PIL import Image
 from tensorflow.keras import backend as K
@@ -18,7 +19,7 @@ import tensorflow as tf
 from model.unet import unet
 from utils.img_processing import *
 import wandb
-
+from  wandb.integration.keras import WandbCallback
 
 class GaussianNoiseAugmentor(Operation):
     """Gaussian Noise in Augmentor format."""
@@ -278,7 +279,12 @@ def create_callbacks(model, original_model, args):
                                             save_best_epochs_only=True, mode='max')
         callbacks.append(model_visualisation)
 
-    # callbacks.append(WandbCallback())
+
+    wandb_callback = WandbCallback(
+        log_evaluation=True,
+    )
+
+    callbacks.append(wandb_callback)
 
     return callbacks
 
