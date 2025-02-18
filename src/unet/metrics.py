@@ -161,8 +161,8 @@ def calculate_metrics(im, im_gt, r_weight, p_weight):
 class CustomMetricCallback(keras.callbacks.Callback):
     def __init__(self):
         super().__init__()
-        images = "./dataset/validation/images"
-        images_gt = "./dataset/validation/images_gt"
+        self.images = "./dataset/validation/images"
+        self.images_gt = "./dataset/validation/images_gt"
 
 
 
@@ -174,8 +174,10 @@ class CustomMetricCallback(keras.callbacks.Callback):
         total_pf_measure = 0.0
         total_psnr = 0.0
         total_drd = 0.0
+        total = 1
 
         for filename in os.listdir(self.images):
+            total += 1
             print(filename)
             reference_input = cv2.imread(filename, cv2.IMREAD_COLOR)
             prediction = binarize_img(reference_input, self.model, 40)
@@ -195,10 +197,10 @@ class CustomMetricCallback(keras.callbacks.Callback):
             total_psnr += psnr
             total_drd += drd
 
-        total_fmeasure /= len(gts)
-        total_pf_measure /= len(gts)
-        total_psnr /= len(gts)
-        total_drd /= len(gts)
+        total_fmeasure /= total
+        total_pf_measure /= total
+        total_psnr /= total
+        total_drd /= total
 
         logs["fmeasure"] = total_fmeasure
         logs["pfmeasure"] = total_pf_measure
