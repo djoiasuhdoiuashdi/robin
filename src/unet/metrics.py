@@ -6,6 +6,9 @@ import numpy as np
 from numba import njit
 from tensorflow import keras
 
+from utils.img_processing import binarize_img
+
+
 def create_weight_matrix(mask_size=5):
     weight_matrix = np.zeros((mask_size, mask_size), dtype=np.float64)
     center = mask_size // 2
@@ -152,69 +155,52 @@ def calculate_metrics(im, im_gt, r_weight, p_weight):
     return f_measure, w_f_measure, psnr, drd
 
 
-def calculate_for_all(gts, imgs, filenames):
-    total_fmeasure = 0.0
-    total_pf_measure = 0.0
-    total_psnr = 0.0
-    total_drd = 0.0
 
-    for i in range(len(gts)):
-
-        filename = filenames[i]
-        print(filename)
-        width, height = gts[i].shape
-        r_weight = np.loadtxt(os.path.join("./dataset/validation/r_weights", filename + "_GT_RWeights.dat"),
-                              dtype=np.float64).flatten()[:height * width].reshape(
-            (height, width))
-        p_weight = np.loadtxt(os.path.join("./dataset/validation/p_weights", filename + "_GT_PWeights.dat"),
-                              dtype=np.float64).flatten()[:height * width].reshape(
-            (height, width))
-
-        fmeasure, pfmeasure, psnr, drd = calculate_metrics(imgs[i], gts[i],r_weight, p_weight)
-        total_fmeasure += fmeasure
-        total_pf_measure += pfmeasure
-        total_psnr += psnr
-        total_drd += drd
-
-    total_fmeasure /= len(gts)
-    total_pf_measure /= len(gts)
-    total_psnr /= len(gts)
-    total_drd /= len(gts)
-
-    return total_fmeasure, total_pf_measure, total_psnr, total_drd
 
 
 class CustomMetricCallback(keras.callbacks.Callback):
-    def __init__(self, validation_generator):
+    def __init__(self):
         super().__init__()
-        self.validation_generator = validation_generator
+        images = "./dataset/validation/images"
+        images_gt = "./dataset/validation/images_gt"
+
+
 
     def on_epoch_end(self, epoch, logs=None):
         print("Epoch ended. Now calculating metrics")
         logs = logs or {}
-        all_preds = []
-        all_trues = []
-        all_filenames = []
 
-        for i in range(len(self.validation_generator)):
-            x, y = self.validation_generator[i]
-            preds = self.model.predict(x)
-            all_preds.append(preds)
-            all_trues.append(y)
+        total_fmeasure = 0.0
+        total_pf_measure = 0.0
+        total_psnr = 0.0
+        total_drd = 0.0
 
-            # Retrieve actual filenames based on current batch indices
-            batch_indices = self.validation_generator.idxs[
-                            i * self.validation_generator.batch_size: (i + 1) * self.validation_generator.batch_size]
-            batch_filenames = [self.validation_generator.fnames_in[idx] for idx in batch_indices]
-            all_filenames.extend(batch_filenames)
+        for filename in os.listdir(self.images):
+            print(filename)
+            reference_input = cv2.imread(filename, cv2.IMREAD_COLOR)
+            prediction = binarize_img(reference_input, self.model, 40)
+            height, width = reference_input.shape[:2]
+            image_gt = cv2.imread(os.path.join(self.images_gt, filename.replace(".bmp")), cv2.IMREAD_COLOR)
 
-        # Concatenate all batches
-        all_preds = np.concatenate(all_preds, axis=0)
-        all_trues = np.concatenate(all_trues, axis=0)
+            r_weight = np.loadtxt(os.path.join("./dataset/validation/r_weights", filename + "_GT_RWeights.dat"),
+                                  dtype=np.float64).flatten()[:height * width].reshape(
+                (height, width))
+            p_weight = np.loadtxt(os.path.join("./dataset/validation/p_weights", filename + "_GT_PWeights.dat"),
+                                  dtype=np.float64).flatten()[:height * width].reshape(
+                (height, width))
 
-        # Compute the custom metric using filenames
-        fmeasure, pfmeasure, psnr, drd = calculate_for_all(all_trues, all_preds, all_filenames)
-        logs["fmeasure"] = fmeasure
-        logs["pfmeasure"] = pfmeasure
-        logs["psnr"] = psnr
-        logs["drd"] = drd
+            fmeasure, pfmeasure, psnr, drd = calculate_metrics(prediction, image_gt, r_weight, p_weight)
+            total_fmeasure += fmeasure
+            total_pf_measure += pfmeasure
+            total_psnr += psnr
+            total_drd += drd
+
+        total_fmeasure /= len(gts)
+        total_pf_measure /= len(gts)
+        total_psnr /= len(gts)
+        total_drd /= len(gts)
+
+        logs["fmeasure"] = total_fmeasure
+        logs["pfmeasure"] = total_pf_measure
+        logs["psnr"] = total_psnr
+        logs["drd"] = total_drd

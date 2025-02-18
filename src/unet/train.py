@@ -320,7 +320,7 @@ def parse_args():
                         help=r'use Keras data augmentation')
 
     # paths.
-    parser.add_argument('-i', '--input', type=str, default="./training_patches",
+    parser.add_argument('-i', '--input', type=str, default="./dataset/train",
                         help=r'directory with input train and ground-truth images (default: "%(default)s")')
     parser.add_argument('-w', '--weights', type=str, default="./weights",
                         help=r'output U-net weights file (default: "%(default)s")')
@@ -381,37 +381,32 @@ def main():
         use_multiprocessing=True
     )
 
-    validation_in = [os.path.join("validation_patches", 'in', str(i) + '_in.png')
-                 for i in range(len(os.listdir(os.path.join("validation_patches", 'in'))))]
-    validation_gt = [os.path.join("validation_patches", 'in', str(i) + '_in.png')
-                 for i in range(len(os.listdir(os.path.join("validation_patches", 'in'))))]
+    # validation_in = [os.path.join("validation_patches", 'in', str(i) + '_in.png')
+    #              for i in range(len(os.listdir(os.path.join("validation_patches", 'in'))))]
+    # validation_gt = [os.path.join("validation_patches", 'in', str(i) + '_in.png')
+    #              for i in range(len(os.listdir(os.path.join("validation_patches", 'in'))))]
 
-    validation_generator = ParallelDataGenerator(
-        fnames_in=validation_in,
-        fnames_gt=validation_gt,
-        batch_size=args.batchsize,
-        augmentate=False,
-        workers=args.extraprocesses,
-        max_queue_size=args.queuesize,
-        use_multiprocessing=True,
-        return_filenames=True
-    )
-
-
+    # validation_generator = ParallelDataGenerator(
+    #     fnames_in=validation_in,
+    #     fnames_gt=validation_gt,
+    #     batch_size=args.batchsize,
+    #     augmentate=False,
+    #     workers=args.extraprocesses,
+    #     max_queue_size=args.queuesize,
+    #     use_multiprocessing=True,
+    #     return_filenames=True
+    # )
 
     model = unet()
     model.compile(optimizer=Adam(learning_rate=1e-4), loss=dice_coef_loss, metrics=[dice_coef, jacard_coef, 'accuracy'])
     callbacks = create_callbacks(args)
-    custom_metric_callback = CustomMetricCallback(
-        validation_generator=validation_generator
-    )
-    callbacks.append(custom_metric_callback)
+    callbacks.append(CustomMetricCallback())
 
     model.fit(
         x=train_generator,
         steps_per_epoch= len(train_generator),
-        validation_data=validation_generator,
-        validation_steps=len(validation_generator),
+        # validation_data=validation_generator,
+        # validation_steps=len(validation_generator),
         epochs = args.epochs,
         shuffle=True,
         callbacks=callbacks,
