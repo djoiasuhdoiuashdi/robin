@@ -62,7 +62,7 @@ def combine_imgs(imgs: [np.array], max_y: int, max_x: int) -> np.array:
     from left to right, from top to bottom.
 
     """
-    img = np.zeros((max_y, max_x), np.float)
+    img = np.zeros((max_y, max_x), np.float32)
     size_y, size_x = imgs[0].shape
     curr_y = 0
     i = 0
