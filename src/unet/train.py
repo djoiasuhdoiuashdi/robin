@@ -1,4 +1,3 @@
-#!/usr/bin/python3
 import wandb
 from wandb.integration.keras import WandbMetricsLogger, WandbModelCheckpoint, WandbEvalCallback
 import argparse
@@ -15,7 +14,6 @@ from tensorflow.keras import backend as K
 from tensorflow.keras.callbacks import (TensorBoard, Callback,ModelCheckpoint)
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.utils import Sequence
-import tensorflow as tf
 from model.unet import unet
 from utils.img_processing import *
 
@@ -101,6 +99,56 @@ class InvertPartAugmentor(Operation):
         return images
 
 
+def __apply_augmentation__(p):
+    batch = []
+    for i in range(0, len(p.augmentor_images)):
+        images_to_return = [Image.fromarray(x) for x in p.augmentor_images[i]]
+
+        for operation in p.operations:
+            r = round(random.uniform(0, 1), 1)
+            if r <= operation.probability:
+                images_to_return = operation.perform_operation(images_to_return)
+
+        images_to_return = [np.asarray(x) for x in images_to_return]
+        batch.append(images_to_return)
+    return batch
+
+
+def augmentate_batch(imgs_in, imgs_gt):
+    """Generate ordered augmented batch of images, using Augmentor"""
+
+    # Non-Linear transformations.
+    imgs = [[imgs_in[i], imgs_gt[i]] for i in range(len(imgs_in))]
+    p = Augmentor.DataPipeline(imgs)
+    p.random_distortion(0.5, 6, 6, 4)
+    # Linear transformations.
+    # p.rotate(0.75, 15, 15)
+    p.shear(0.75, 10.0, 10.0)
+    p.zoom(0.75, 1.0, 1.2)
+    p.skew(0.75, 0.75)
+    imgs = __apply_augmentation__(p)
+    imgs_in = [p[0] for p in imgs]
+    imgs_gt = [p[1] for p in imgs]
+
+    # Noise transformations.
+    p = Augmentor.DataPipeline([[img] for img in imgs_in])
+    gaussian_noise = GaussianNoiseAugmentor(0.25, 0, 10)
+    p.add_operation(gaussian_noise)
+    salt_pepper_noise = SaltPepperNoiseAugmentor(0.25, 0.005)
+    p.add_operation(salt_pepper_noise)
+    # Brightness transformation.
+    p.random_brightness(0.75, 0.5, 1.5)
+    p.random_contrast(0.75, 0.5, 1.5)
+    # Colors invertion.
+    invert = InvertPartAugmentor(0.25)
+    p.add_operation(invert)
+    p.invert(0.5)
+    imgs_in = __apply_augmentation__(p)
+    imgs_in = [p[0] for p in imgs_in]
+
+    return imgs_in, imgs_gt
+
+
 class ParallelDataGenerator(Sequence):
     """Generate images for training/validation/testing (parallel version)."""
 
@@ -118,54 +166,6 @@ class ParallelDataGenerator(Sequence):
     def on_epoch_end(self):
         np.random.shuffle(self.idxs)
 
-    def __apply_augmentation__(self, p):
-        batch = []
-        for i in range(0, len(p.augmentor_images)):
-            images_to_return = [Image.fromarray(x) for x in p.augmentor_images[i]]
-
-            for operation in p.operations:
-                r = round(random.uniform(0, 1), 1)
-                if r <= operation.probability:
-                    images_to_return = operation.perform_operation(images_to_return)
-
-            images_to_return = [np.asarray(x) for x in images_to_return]
-            batch.append(images_to_return)
-        return batch
-
-    def augmentate_batch(self, imgs_in, imgs_gt):
-        """Generate ordered augmented batch of images, using Augmentor"""
-
-        # Non-Linear transformations.
-        imgs = [[imgs_in[i], imgs_gt[i]] for i in range(len(imgs_in))]
-        p = Augmentor.DataPipeline(imgs)
-        p.random_distortion(0.5, 6, 6, 4)
-        # Linear transformations.
-        # p.rotate(0.75, 15, 15)
-        p.shear(0.75, 10.0, 10.0)
-        p.zoom(0.75, 1.0, 1.2)
-        p.skew(0.75, 0.75)
-        imgs = self.__apply_augmentation__(p)
-        imgs_in = [p[0] for p in imgs]
-        imgs_gt = [p[1] for p in imgs]
-
-        # Noise transformations.
-        p = Augmentor.DataPipeline([[img] for img in imgs_in])
-        gaussian_noise = GaussianNoiseAugmentor(0.25, 0, 10)
-        p.add_operation(gaussian_noise)
-        salt_pepper_noise = SaltPepperNoiseAugmentor(0.25, 0.005)
-        p.add_operation(salt_pepper_noise)
-        # Brightness transformation.
-        p.random_brightness(0.75, 0.5, 1.5)
-        p.random_contrast(0.75, 0.5, 1.5)
-        # Colors invertion.
-        invert = InvertPartAugmentor(0.25)
-        p.add_operation(invert)
-        p.invert(0.5)
-        imgs_in = self.__apply_augmentation__(p)
-        imgs_in = [p[0] for p in imgs_in]
-
-        return imgs_in, imgs_gt
-
     def __getitem__(self, idx):
         # Creating numpy arrays with images.
         start = idx * self.batch_size
@@ -181,7 +181,7 @@ class ParallelDataGenerator(Sequence):
 
         # Applying augmentations.
         if self.augmentate:
-            imgs_in, imgs_gt = self.augmentate_batch(imgs_in, imgs_gt)
+            imgs_in, imgs_gt = augmentate_batch(imgs_in, imgs_gt)
 
         """
         # Debug.
@@ -200,63 +200,58 @@ class ParallelDataGenerator(Sequence):
         return imgs_in, imgs_gt
 
 
-class Visualisation(Callback):
-    """Custom Keras callback for visualising training through GIFs."""
+# class Visualisation(Callback):
+#     """Custom Keras callback for visualising training through GIFs."""
+#
+#     def __init__(self, dir_name: str = 'visualisation', batchsize: int = 20,
+#                  monitor: str = 'val_loss', save_best_epochs_only: bool = False, mode: str = 'min'):
+#         super(Visualisation, self).__init__()
+#         self.dir_name = dir_name
+#         self.batchsize = batchsize
+#         self.epoch_number = 0
+#         self.fnames = os.listdir(self.dir_name)
+#         for fname in self.fnames:
+#             mkdir_s(os.path.join(self.dir_name, fname[:fname.rfind('.')] + '_frames'))
+#         self.monitor = monitor
+#         self.save_best_epochs_only = save_best_epochs_only
+#         self.mode = mode
+#         self.curr_metric = None
+#
+#     def on_train_end(self, logs=None):
+#         for fname in self.fnames:
+#             frames = []
+#             for frame_name in sorted(os.listdir(os.path.join(self.dir_name, fname[:fname.rfind('.')] + '_frames'))):
+#                 frames.append(imageio.imread(os.path.join(self.dir_name,
+#                                                           fname[:fname.rfind('.')] + '_frames',
+#                                                           frame_name)))
+#             imageio.mimsave(os.path.join(self.dir_name, fname[:fname.rfind('.')] + '.gif'),
+#                             frames, format='GIF', duration=0.5)
+#             # rmtree(os.path.join(self.dir_name, fname[:fname.rfind('.')] + '_frames'))
+#
+#     def on_epoch_end(self, epoch, logs):
+#         self.epoch_number += 1
+#         if (not self.save_best_epochs_only) or \
+#                 ((self.curr_metric is None) or
+#                  (self.mode == 'min' and logs[self.monitor] < self.curr_metric) or
+#                  (self.mode == 'max' and logs[self.monitor] > self.curr_metric)):
+#             self.curr_metric = logs[self.monitor]
+#             for fname in self.fnames:
+#                 img = cv2.imread(os.path.join(self.dir_name, fname), cv2.IMREAD_GRAYSCALE).astype(np.float32)
+#                 img = binarize_img(img, self.model, self.batchsize)
+#                 cv2.imwrite(os.path.join(self.dir_name, fname[:fname.rfind('.')] + '_frames',
+#                                          str(self.epoch_number) + '_out.png'), img)
 
-    def __init__(self, dir_name: str = 'visualisation', batchsize: int = 20,
-                 monitor: str = 'val_loss', save_best_epochs_only: bool = False, mode: str = 'min'):
-        super(Visualisation, self).__init__()
-        self.dir_name = dir_name
-        self.batchsize = batchsize
-        self.epoch_number = 0
-        self.fnames = os.listdir(self.dir_name)
-        for fname in self.fnames:
-            mkdir_s(os.path.join(self.dir_name, fname[:fname.rfind('.')] + '_frames'))
-        self.monitor = monitor
-        self.save_best_epochs_only = save_best_epochs_only
-        self.mode = mode
-        self.curr_metric = None
 
-    def on_train_end(self, logs=None):
-        for fname in self.fnames:
-            frames = []
-            for frame_name in sorted(os.listdir(os.path.join(self.dir_name, fname[:fname.rfind('.')] + '_frames'))):
-                frames.append(imageio.imread(os.path.join(self.dir_name,
-                                                          fname[:fname.rfind('.')] + '_frames',
-                                                          frame_name)))
-            imageio.mimsave(os.path.join(self.dir_name, fname[:fname.rfind('.')] + '.gif'),
-                            frames, format='GIF', duration=0.5)
-            # rmtree(os.path.join(self.dir_name, fname[:fname.rfind('.')] + '_frames'))
-
-    def on_epoch_end(self, epoch, logs):
-        self.epoch_number += 1
-        if (not self.save_best_epochs_only) or \
-                ((self.curr_metric is None) or
-                 (self.mode == 'min' and logs[self.monitor] < self.curr_metric) or
-                 (self.mode == 'max' and logs[self.monitor] > self.curr_metric)):
-            self.curr_metric = logs[self.monitor]
-            for fname in self.fnames:
-                img = cv2.imread(os.path.join(self.dir_name, fname), cv2.IMREAD_GRAYSCALE).astype(np.float32)
-                img = binarize_img(img, self.model, self.batchsize)
-                cv2.imwrite(os.path.join(self.dir_name, fname[:fname.rfind('.')] + '_frames',
-                                         str(self.epoch_number) + '_out.png'), img)
-
-
-def create_callbacks(model, original_model, args):
+def create_callbacks(args):
     """Create Keras callbacks for training."""
     callbacks = []
 
-    # Model checkpoint.
-    if args.gpus == 1:
-        model_checkpoint = ModelCheckpoint(filepath=os.path.join(args.weights,
-                                                                'weights-improvement-{epoch:02d}.weights.h5'),
-                                             monitor='val_dice_coef', mode='max', verbose=1,
-                                              save_best_only=True, save_weights_only=True)
-    else:
-        model_checkpoint = ModelCheckpoint(filepath=os.path.join(args.weights,
-                                                                'weights-improvement-{epoch:02d}.weights.h5'),
-                                              monitor='val_dice_coef', mode='max', verbose=1,
-                                              save_best_only=True, save_weights_only=True)
+
+    model_checkpoint = ModelCheckpoint(filepath=os.path.join(args.weights,
+                                                            'weights-improvement-{epoch:02d}.weights.h5'),
+                                         monitor='val_dice_coef', mode='max', verbose=1,
+                                          save_best_only=True, save_weights_only=True)
+
     callbacks.append(model_checkpoint)
 
     # Early stopping.
@@ -273,13 +268,10 @@ def create_callbacks(model, original_model, args):
         callbacks.append(model_tensorboard)
 
     # Training visualisation.
-    if args.vis != '':
-        model_visualisation = Visualisation(dir_name=args.vis, batchsize=args.batchsize, monitor='val_dice_coef',
-                                            save_best_epochs_only=True, mode='max')
-        callbacks.append(model_visualisation)
-
-
-
+    # if args.vis != '':
+    #     model_visualisation = Visualisation(dir_name=args.vis, batchsize=args.batchsize, monitor='val_dice_coef',
+    #                                         save_best_epochs_only=True, mode='max')
+    #     callbacks.append(model_visualisation)
 
     callbacks.append(WandbMetricsLogger())
 
@@ -293,12 +285,10 @@ def dice_coef(y_true, y_pred):
     intersection = K.sum(y_true_f * y_pred_f)
     return (2.0 * intersection + 1.0) / (K.sum(y_true_f) + K.sum(y_pred_f) + 1.0)
 
-@tf.autograph.experimental.do_not_convert
 def dice_coef_loss(y_true, y_pred):
     """Count loss of Sorensen-Dice coefficient for output and ground-truth image."""
     return 1 - dice_coef(y_true, y_pred)
 
-@tf.autograph.experimental.do_not_convert
 def jacard_coef(y_true, y_pred):
     """Count Jaccard coefficient for output and ground-truth image."""
     y_true_f = K.flatten(y_true)
@@ -341,7 +331,7 @@ def parse_args():
                         help=r'use Keras data augmentation')
 
     # paths.
-    parser.add_argument('-i', '--input', type=str, default=os.path.join('.', 'input'),
+    parser.add_argument('-i', '--input', type=str, default="./training_patches",
                         help=r'directory with input train and ground-truth images (default: "%(default)s")')
     parser.add_argument('-w', '--weights', type=str, default="./weights",
                         help=r'output U-net weights file (default: "%(default)s")')
@@ -405,17 +395,19 @@ def main():
                  for i in range(len(os.listdir(os.path.join("validation_patches", 'in'))))]
     validation_gt = [os.path.join("validation_patches", 'in', str(i) + '_in.png')
                  for i in range(len(os.listdir(os.path.join("validation_patches", 'in'))))]
-    validation_generator = ParallelDataGenerator(validation_in, validation_gt, args.batchsize, args.augmentate,
+
+    validation_generator = ParallelDataGenerator(
+        validation_in,
+        validation_gt, args.batchsize,
+        args.augmentate,
         workers=args.extraprocesses,
         max_queue_size=args.queuesize,
-        use_multiprocessing=True)
+        use_multiprocessing=True
+    )
 
-    original_model = unet()
-    strategy = tf.distribute.MirroredStrategy()
-    with strategy.scope():
-        model = unet()
-        model.compile(optimizer=Adam(learning_rate=1e-4), loss=dice_coef_loss, metrics=[dice_coef, jacard_coef, 'accuracy'])
-    callbacks = create_callbacks(model, original_model, args)
+    model = unet()
+    model.compile(optimizer=Adam(learning_rate=1e-4), loss=dice_coef_loss, metrics=[dice_coef, jacard_coef, 'accuracy'])
+    callbacks = create_callbacks(args)
 
     model.fit(
         x=train_generator,
@@ -437,7 +429,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-# TODO:
-# Add Wandb Logging
-# Remove Any Errors

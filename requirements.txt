@@ -1,8 +1,7 @@
-keras~=2.11.0
 opencv-python~=4.11.0.86
-numpy~=1.19.5
+numpy==1.26.4
 augmentor~=0.2.3
-pillow~=9.5.0
-imageio~=2.4.1
-tensorflow~=2.11.0
-wandb~=0.18.7
+pillow==11.1.0
+imageio==2.37.0
+wandb==0.19.6
+tensorflow==2.17.0
