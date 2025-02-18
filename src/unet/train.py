@@ -15,6 +15,7 @@ from tensorflow.keras.callbacks import (TensorBoard, Callback,ModelCheckpoint)
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.utils import Sequence
 from model.unet import unet
+from src.metrics.metrics import CustomMetricCallback
 from utils.img_processing import *
 
 
@@ -407,9 +408,15 @@ def main():
         return_filenames=True
     )
 
+
+
     model = unet()
     model.compile(optimizer=Adam(learning_rate=1e-4), loss=dice_coef_loss, metrics=[dice_coef, jacard_coef, 'accuracy'])
     callbacks = create_callbacks(args)
+    custom_metric_callback = CustomMetricCallback(
+        validation_generator=validation_generator
+    )
+    callbacks.append(custom_metric_callback)
 
     model.fit(
         x=train_generator,
