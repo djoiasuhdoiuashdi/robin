@@ -15,6 +15,7 @@ from tensorflow.keras.callbacks import (TensorBoard, Callback,ModelCheckpoint)
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.utils import Sequence
 from model.unet import unet
+from src.metrics.metrics import calculate_for_all
 from utils.img_processing import *
 from tensorflow import keras
 
@@ -24,6 +25,8 @@ class CustomMetricCallback(keras.callbacks.Callback):
         self.validation_generator = validation_generator
 
     def on_epoch_end(self, epoch, logs=None):
+
+        print("Epoch ended. Now calculating metrics")
         logs = logs or {}
         all_preds = []
         all_trues = []
@@ -240,11 +243,6 @@ class ParallelDataGenerator(Sequence):
             return imgs_in, imgs_gt, batch_filenames
         else:
             return imgs_in, imgs_gt
-
-
-
-
-
 
 # class Visualisation(Callback):
 #     """Custom Keras callback for visualising training through GIFs."""
