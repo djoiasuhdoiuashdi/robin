@@ -254,19 +254,6 @@ def create_callbacks(args):
 
     callbacks.append(model_checkpoint)
 
-    # Early stopping.
-    # model_early_stopping = EarlyStopping(monitor='val_dice_coef', min_delta=0.001, patience=20, verbose=1, mode='max')
-    # callbacks.append(model_early_stopping)
-
-    # Tensorboard logs.
-    if args.debug != '':
-        mkdir_s(args.debug)
-        mkdir_s(os.path.join(args.debug, 'weights'))
-        mkdir_s(os.path.join(args.debug, 'logs'))
-        model_tensorboard = TensorBoard(log_dir=os.path.join(args.debug, 'logs'),
-                                        histogram_freq=0, write_graph=True, write_images=True)
-        callbacks.append(model_tensorboard)
-
     # Training visualisation.
     # if args.vis != '':
     #     model_visualisation = Visualisation(dir_name=args.vis, batchsize=args.batchsize, monitor='val_dice_coef',
@@ -336,15 +323,12 @@ def parse_args():
     parser.add_argument('-w', '--weights', type=str, default="./weights",
                         help=r'output U-net weights file (default: "%(default)s")')
 
-    # Additional callbacks.
-    parser.add_argument('-d', '--debug', type=str, default='',
-                        help=r'directory to save tensorboard logs and weights history')
     parser.add_argument('--vis', type=str, default='',
                         help=r'directory with images for training visualisation')
 
+    parser.add_argument("-lr", "--learning_rate", type=float, default=0.001)
+
     # Hardware.
-    parser.add_argument('-g', '--gpus', type=int, default=1,
-                        help=r'number of GPUs for training (default: %(default)s)')
     parser.add_argument('-p', '--extraprocesses', type=int, default=0,
                         help=r'number of extra processes for data augmentation (default: %(default)s)')
     parser.add_argument('-q', '--queuesize', type=int, default=10,
@@ -354,8 +338,6 @@ def parse_args():
 
     assert (args.epochs > 0)
     assert (args.batchsize > 0)
-
-    assert (args.gpus >= 1)
     assert (args.extraprocesses >= 0)
     assert (args.queuesize >= 0)
 
@@ -370,7 +352,13 @@ def main():
     wandb.init(
         project="robin",
         config={
-        "learning_rate": 1e-4
+            "dataset": args.input,
+            "extra_processes": args.extraprocesses,
+            "queue_size": args.queuesize,
+            "learning_rate": args.learning_rate,
+            "batch_size": args.batchsize,
+            "epochs": args.epochs,
+            "augmentate": args.augmentate,
         }
     )
 
@@ -420,9 +408,7 @@ def main():
         callbacks=callbacks,
     )
 
-    # Saving model.
-    if args.debug != '':
-        model.save_weights(os.path.join(args.weights, "bin.weights.h5"))
+
     print("finished in {0:.2f} seconds".format(time.time() - start_time))
     # Sometimes script freezes.
     sys.exit(0)
