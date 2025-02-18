@@ -17,43 +17,6 @@ from tensorflow.keras.utils import Sequence
 from model.unet import unet
 from src.metrics.metrics import calculate_for_all
 from utils.img_processing import *
-from tensorflow import keras
-
-class CustomMetricCallback(keras.callbacks.Callback):
-    def __init__(self, validation_generator):
-        super().__init__()
-        self.validation_generator = validation_generator
-
-    def on_epoch_end(self, epoch, logs=None):
-
-        print("Epoch ended. Now calculating metrics")
-        logs = logs or {}
-        all_preds = []
-        all_trues = []
-        all_filenames = []
-
-        for i in range(len(self.validation_generator)):
-            batch = self.validation_generator[i]
-            if len(batch) == 3:
-                x, y, filenames = batch
-            else:
-                raise ValueError("Validation generator must return inputs, targets, and filenames.")
-
-            preds = self.model.predict(x)
-            all_preds.append(preds)
-            all_trues.append(y)
-            all_filenames.extend(filenames)
-
-        # Concatenate all batches
-        all_preds = np.concatenate(all_preds, axis=0)
-        all_trues = np.concatenate(all_trues, axis=0)
-
-        # Compute the custom metric using filenames
-        fmeasure, pfmeasure, psnr, drd = calculate_for_all(all_trues, all_preds, all_filenames)
-        logs["fmeasure"] = fmeasure
-        logs["pfmeasure"] = pfmeasure
-        logs["psnr"] = psnr
-        logs["drd"] = drd
 
 
 class GaussianNoiseAugmentor(Operation):

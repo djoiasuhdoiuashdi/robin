@@ -4,7 +4,7 @@ import os
 import cv2
 import numpy as np
 from numba import njit
-
+from tensorflow import keras
 
 def create_weight_matrix(mask_size=5):
     weight_matrix = np.zeros((mask_size, mask_size), dtype=np.float64)
@@ -184,3 +184,38 @@ def calculate_for_all(gts, imgs, filenames):
     return total_fmeasure, total_pf_measure, total_psnr, total_drd
 
 
+class CustomMetricCallback(keras.callbacks.Callback):
+    def __init__(self, validation_generator):
+        super().__init__()
+        self.validation_generator = validation_generator
+
+    def on_epoch_end(self, epoch, logs=None):
+
+        print("Epoch ended. Now calculating metrics")
+        logs = logs or {}
+        all_preds = []
+        all_trues = []
+        all_filenames = []
+
+        for i in range(len(self.validation_generator)):
+            batch = self.validation_generator[i]
+            if len(batch) == 3:
+                x, y, filenames = batch
+            else:
+                raise ValueError("Validation generator must return inputs, targets, and filenames.")
+
+            preds = self.model.predict(x)
+            all_preds.append(preds)
+            all_trues.append(y)
+            all_filenames.extend(filenames)
+
+        # Concatenate all batches
+        all_preds = np.concatenate(all_preds, axis=0)
+        all_trues = np.concatenate(all_trues, axis=0)
+
+        # Compute the custom metric using filenames
+        fmeasure, pfmeasure, psnr, drd = calculate_for_all(all_trues, all_preds, all_filenames)
+        logs["fmeasure"] = fmeasure
+        logs["pfmeasure"] = pfmeasure
+        logs["psnr"] = psnr
+        logs["drd"] = drd
