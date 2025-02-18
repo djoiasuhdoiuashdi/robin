@@ -164,8 +164,6 @@ class CustomMetricCallback(keras.callbacks.Callback):
         self.images = "./dataset/validation/images"
         self.images_gt = "./dataset/validation/images_gt"
 
-
-
     def on_epoch_end(self, epoch, logs=None):
         print("Epoch ended. Now calculating metrics")
         logs = logs or {}
@@ -179,10 +177,10 @@ class CustomMetricCallback(keras.callbacks.Callback):
         for filename in os.listdir(self.images):
             total += 1
             print(filename)
-            reference_input = cv2.imread(filename, cv2.IMREAD_COLOR)
+            reference_input = cv2.imread(os.path.join(self.images, filename), cv2.IMREAD_COLOR)
             prediction = binarize_img(reference_input, self.model, 40)
             height, width = reference_input.shape[:2]
-            image_gt = cv2.imread(os.path.join(self.images_gt, filename.replace(".bmp")), cv2.IMREAD_COLOR)
+            image_gt = cv2.imread(os.path.join(self.images_gt, filename.replace(".tiff","_GT.tiff")), cv2.IMREAD_COLOR)
 
             r_weight = np.loadtxt(os.path.join("./dataset/validation/r_weights", filename + "_GT_RWeights.dat"),
                                   dtype=np.float64).flatten()[:height * width].reshape(
