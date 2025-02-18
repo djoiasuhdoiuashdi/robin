@@ -18,6 +18,7 @@ from model.unet import unet
 from utils.img_processing import *
 
 
+
 class GaussianNoiseAugmentor(Operation):
     """Gaussian Noise in Augmentor format."""
 
@@ -152,52 +153,63 @@ def augmentate_batch(imgs_in, imgs_gt):
 class ParallelDataGenerator(Sequence):
     """Generate images for training/validation/testing (parallel version)."""
 
-    def __init__(self, fnames_in, fnames_gt, batch_size: int, augmentate: bool, **kwargs):
+    def __init__(self, fnames_in, fnames_gt, batch_size: int, augmentate: bool, return_filenames: bool = False,
+                 shuffle: bool = True, **kwargs):
         super().__init__(**kwargs)
         self.fnames_in = deepcopy(fnames_in)
         self.fnames_gt = deepcopy(fnames_gt)
         self.batch_size = batch_size
         self.augmentate = augmentate
-        self.idxs = np.array([i for i in range(len(self.fnames_in))])
+        self.return_filenames = return_filenames
+        self.shuffle = shuffle
+        self.idxs = np.arange(len(self.fnames_in))
+        if self.shuffle:
+            np.random.shuffle(self.idxs)
 
     def __len__(self):
-        return int(np.ceil(float(self.idxs.shape[0]) / float(self.batch_size)))
+        return int(np.ceil(len(self.idxs) / self.batch_size))
 
     def on_epoch_end(self):
-        np.random.shuffle(self.idxs)
+        if self.shuffle:
+            np.random.shuffle(self.idxs)
 
     def __getitem__(self, idx):
-        # Creating numpy arrays with images.
+        # Determine batch indices
         start = idx * self.batch_size
         stop = start + self.batch_size
-        if stop >= self.idxs.shape[0]:
-            stop = self.idxs.shape[0]
+        stop = min(stop, len(self.idxs))
+        batch_indices = self.idxs[start:stop]
 
         imgs_in = []
         imgs_gt = []
-        for i in range(start, stop):
-            imgs_in.append(cv2.imread(self.fnames_in[self.idxs[i]], cv2.IMREAD_GRAYSCALE))
-            imgs_gt.append(cv2.imread(self.fnames_gt[self.idxs[i]], cv2.IMREAD_GRAYSCALE))
+        batch_filenames = []
 
-        # Applying augmentations.
+        for i in batch_indices:
+            img_in = cv2.imread(self.fnames_in[i], cv2.IMREAD_GRAYSCALE)
+            img_gt = cv2.imread(self.fnames_gt[i], cv2.IMREAD_GRAYSCALE)
+            imgs_in.append(img_in)
+            imgs_gt.append(img_gt)
+            if self.return_filenames:
+                batch_filenames.append(self.fnames_in[i])
+
+        # Apply augmentations if needed
         if self.augmentate:
             imgs_in, imgs_gt = augmentate_batch(imgs_in, imgs_gt)
 
-        """
-        # Debug.
-        for i in range(len(imgs_in)):
-            cv2.imshow('in_' + str(i), imgs_in[i])
-            cv2.imshow('gt_' + str(i), imgs_gt[i])
-            cv2.waitKey(0)
-        """
-
-        # Normalization.
+        # Normalize images
         imgs_in = np.array([normalize_in(img) for img in imgs_in])
-        imgs_in.shape = (imgs_in.shape[0], imgs_in.shape[1], imgs_in.shape[2], 1)
+        imgs_in = imgs_in[..., np.newaxis]  # Add channel dimension
         imgs_gt = np.array([normalize_gt(img) for img in imgs_gt])
-        imgs_gt.shape = (imgs_gt.shape[0], imgs_gt.shape[1], imgs_gt.shape[2], 1)
+        imgs_gt = imgs_gt[..., np.newaxis]  # Add channel dimension
 
-        return imgs_in, imgs_gt
+        if self.return_filenames:
+            return imgs_in, imgs_gt, batch_filenames
+        else:
+            return imgs_in, imgs_gt
+
+
+
+
 
 
 # class Visualisation(Callback):
@@ -388,10 +400,11 @@ def main():
         fnames_in=validation_in,
         fnames_gt=validation_gt,
         batch_size=args.batchsize,
-        augmentate=args.augmentate,
+        augmentate=False,
         workers=args.extraprocesses,
         max_queue_size=args.queuesize,
-        use_multiprocessing=True
+        use_multiprocessing=True,
+        return_filenames=True
     )
 
     model = unet()

@@ -1,130 +1,219 @@
-#!/usr/bin/python3
-
 import argparse
-import glob
 import os
-import sys
-import time
-from functools import partial
-from functools import reduce
-from multiprocessing import Pool
-from multiprocessing import cpu_count
-from platform import system
-from re import search
+
+import cv2
+import numpy as np
+from numba import njit
+from tensorflow import keras
+
+def create_weight_matrix(mask_size=5):
+    weight_matrix = np.zeros((mask_size, mask_size), dtype=np.float64)
+    center = mask_size // 2
+
+    for i in range(mask_size):
+        for j in range(mask_size):
+            if i == center and j == center:
+                weight_matrix[i, j] = 0.0
+            else:
+                distance = np.sqrt((i - center) ** 2 + (j - center) ** 2)
+                weight_matrix[i, j] = 1.0 / distance
+
+    # Normalize the weight matrix
+    sum_weights = np.sum(weight_matrix)
+
+    return weight_matrix / sum_weights
 
 
-class Metrics:
-    """Metrics contains basic DIBCO metrics for binarized and ground-truth image:
-    F-Measure, pseudo F-Measure, PSNR, DRD.
-    By default value of every measure is zero.
-    """
+@njit
+def dr_dcalc(i, j, image_gt, image, normalized_weight_matrix, mask_size):
+    height, width = image_gt.shape
 
-    def __init__(self):
-        self.fm = 0.0
-        self.pfm = 0.0
-        self.psnr = 0.0
-        self.drd = 0.0
+    value_gk = image[i, j]
 
-    def __add__(self, other):
-        metrics = Metrics()
-        metrics.fm = self.fm + other.fm
-        metrics.pfm = self.pfm + other.pfm
-        metrics.psnr = self.psnr + other.psnr
-        metrics.drd = self.drd + other.drd
-        return metrics
+    Bk = np.zeros((mask_size, mask_size), dtype=np.float64)
+    Dk = np.zeros((mask_size, mask_size), dtype=np.float64)
+    h = 2
+    for x in range(mask_size):
+        for y in range(mask_size):
+            if i - h + x < 0 or j - h + y < 0 or i - h + x >= height or j - h + y >= width:
+                Bk[x, y] = value_gk
+            else:
+                Bk[x, y] = image_gt[i - h + x, j - h + y];
+            Dk[x, y] = abs(Bk[x, y] - value_gk);
 
-    def __str__(self):
-        return 'FM:   {0:.2f};\nPFM:  {1:.2f};\nPSNR: {2:.2f};\nDRD:  {3:.2f};\n'.format(
-            self.fm, self.pfm, self.psnr, self.drd)
+        DRDk = Dk * normalized_weight_matrix
 
+    res = np.sum(DRDk)
 
-def meter(fname_out: str, weights: str, metrics: str, data: str) -> Metrics:
-    """Meter F-Measure, pseudo F-Measure, PSNR and DRD of your binarization."""
-    fname_gt = fname_out.replace('_out', '_gt')
-    fname_res = fname_gt[:fname_gt.rfind('_gt')] + '_res.txt'
-    os.system(weights + ' ' + os.path.join(data, fname_gt) + " > NUL")
-    os.system(metrics + ' ' +
-              os.path.join(data, fname_gt) + ' ' +
-              os.path.join(data, fname_out) + ' ' +
-              os.path.join(data, fname_gt[:fname_gt.rfind('.')] + '_RWeights.dat') + ' ' +
-              os.path.join(data, fname_gt[:fname_gt.rfind('.')] + '_PWeights.dat') + ' ' +
-              '> ' + os.path.join(data, fname_res))
-    os.remove(os.path.join(data, fname_gt[:fname_gt.rfind('.')] + '_RWeights.dat'))
-    os.remove(os.path.join(data, fname_gt[:fname_gt.rfind('.')] + '_PWeights.dat'))
-    m = Metrics()
-    with open(os.path.join(data, fname_res), 'r') as res:
-        dot_num_regexp = r'\d+\.\d+'
-        for line in res:
-            if 'pseudo F-Measure (Fps)' in line:
-                m.pfm = float(search(dot_num_regexp, line).group(0))
-            elif 'F-Measure' in line:
-                m.fm = float(search(dot_num_regexp, line).group(0))
-            elif 'PSNR' in line:
-                m.psnr = float(search(dot_num_regexp, line).group(0))
-            elif 'DRD' in line:
-                m.drd = float(search(dot_num_regexp, line).group(0))
-    with open(os.path.join(data, fname_res), 'w') as res:
-        res.write(str(m))
-    return m
+    return res
 
 
-bad_os_str = r"""This script is platform-dependent. It can be run only on Microsoft Windows."""
+@njit
+def NUBNcalc(f, ii, jj, blck):
+    startx = (ii - 1) * blck
+    endx = ii * blck
+    starty = (jj - 1) * blck
+    endy = jj * blck
 
-desc_str = r"""Meter quality of your binarization.
+    check_prv = -2
+    retb = 0.0
 
-Only for Microsoft Windows.
+    for xx in range(startx, endx):
+        for yy in range(starty, endy):
+            check = f[xx, yy]
+            if check_prv < 0:
+                check_prv = check
+            else:
+                if check != check_prv:
+                    retb = 1
+                    break
+        if retb != 0:
+            break
 
-Script requires DIBCO weights and metrics evaluation tools and
-directory with input binarized and ground-truth images.
-All binarized image names should end with "_out" like "1_out.png".
-All ground-truth image should end with "_gt" like "1_gt.png".
-After script finishes, in the output directory there will be metrics files
-wtih four measures: F-Measure, pseudo F-Measure, PSNR and DRD.
-
-"""
-
-
-def parse_args():
-    """Get command line arguments."""
-    parser = argparse.ArgumentParser(prog='metrics',
-                                     formatter_class=argparse.RawDescriptionHelpFormatter,
-                                     description=desc_str)
-    parser.add_argument('-v', '--version', action='version', version='%(prog)s v0.1')
-    parser.add_argument('-i', '--input', type=str, default=os.path.join('.', 'input'),
-                        help=r'directory with input binarized and ground-truth images (default: "%(default)s")')
-    parser.add_argument('-o', '--output', type=str, default=os.path.join('.', 'output'),
-                        help=r'directory with output metrics files (default: "%(default)s")')
-    parser.add_argument('-w', '--weights', type=str, default=os.path.join('weights', 'weights.exe'),
-                        help=r'path to weights evaluation tool (default: %(default)s)')
-    parser.add_argument('-m', '--metrics', type=str, default=os.path.join('metrics', 'metrics.exe'),
-                        help=r'path to metrics evaluation tool (default: %(default)s)')
-    parser.add_argument('-p', '--procs', type=int, default=cpu_count(),
-                        help=r'number of processes (default: %(default)s)')
-    return parser.parse_args()
+    return retb
 
 
-def main():
-    start_time = time.time()
+def get_drd(im, im_gt, normalized_weight_matrix):
+    img_height, img_width = im.shape
 
-    if system() != 'Windows':
-        print(bad_os_str)
-        sys.exit(1)
+    block_size = 8
+    n = 2
+    mask_size = 2 * n + 1
 
-    args = parse_args()
+    total_nubn = 0.0
+    xb = img_height // block_size
+    yb = img_width // block_size
 
-    fnames_out = list(glob.iglob(os.path.join(args.input, '**', '*_out.*'), recursive=True))
-    with open(os.path.join(args.output, 'total_res.txt'), 'w') as res:
-        total_res = reduce(lambda a, b: a + b, Pool(args.processes).map(
-            partial(meter, weights=args.weights, metrics=args.metrics, data=args.data), fnames_out))
-        n = len(fnames_out)
-        total_res.fm /= n
-        total_res.pfm /= n
-        total_res.psnr /= n
-        total_res.drd /= n
-        res.write(str(total_res))
+    for i in range(1, xb + 1):
+        for j in range(1, yb + 1):
+            nubn_b = NUBNcalc(im_gt, i, j, block_size)
+            total_nubn += nubn_b
 
-    print("finished in {0:.2f} seconds".format(time.time() - start_time))
+    np.set_printoptions(precision=20, suppress=True, threshold=np.inf)
+    total_drd = 0.0
+
+    difference_image = np.where(np.abs(im - im_gt) > 0.5)
+
+    for i, j in zip(difference_image[0], difference_image[1]):
+        total_drd += dr_dcalc(i, j, im_gt, im, normalized_weight_matrix, mask_size)
+
+    return total_drd / total_nubn
 
 
-if __name__ == "__main__":
-    main()
+def load_image_as_binary(image_path):
+    image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    binary_array = (image > 0).astype(np.uint8)
+    return binary_array
+
+
+def calculate_metrics(im, im_gt, r_weight, p_weight):
+    height, width = im_gt.shape
+
+    # Compute DRD metric
+    normalized_weight_matrix = create_weight_matrix()
+    drd = get_drd(im, im_gt, normalized_weight_matrix)
+
+    # Create masks
+    TP_mask = (im == 0) & (im_gt == 0)
+    FP_mask = (im == 0) & (im_gt == 1)
+    FN_mask = (im == 1) & (im_gt == 0)
+
+    # Compute weighted weights
+    weighted_p_weight = 1.0 + p_weight
+
+    # Sum weighted weights using masks
+    TPwp = weighted_p_weight[TP_mask].sum()
+    FPwp = weighted_p_weight[FP_mask].sum()
+    TPwr = r_weight[TP_mask].sum()
+    FNwr = r_weight[FN_mask].sum()
+
+    # Compute weighted precision, recall, and F-measure
+    w_precision = TPwp / (TPwp + FPwp) if (TPwp + FPwp) > 0 else 0.0
+    w_recall = TPwr / (TPwr + FNwr) if (TPwr + FNwr) > 0 else 0.0
+    w_f_measure = (2 * w_precision * w_recall) / (w_precision + w_recall) if (w_precision + w_recall) > 0 else 0.0
+
+    # Compute standard precision, recall, and F-measure
+    TP = TP_mask.sum()
+    FP = FP_mask.sum()
+    FN = FN_mask.sum()
+
+    precision = TP / (TP + FP) if (TP + FP) > 0 else 0.0
+    recall = TP / (TP + FN) if (TP + FN) > 0 else 0.0
+    f_measure = (2 * precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+
+    # Compute MSE and PSNR
+    npixel = height * width
+    mse = (FP + FN) / npixel
+    psnr = 10.0 * np.log10(1.0 / mse) if mse > 0 else float('inf')
+
+    f_measure *= 100
+    w_f_measure *= 100
+
+    return f_measure, w_f_measure, psnr, drd
+
+
+def calculate_for_all(gts, imgs, filenames):
+    total_fmeasure = 0.0
+    total_pf_measure = 0.0
+    total_psnr = 0.0
+    total_drd = 0.0
+
+    for i in range(len(gts)):
+
+        filename = filenames[i]
+        print(filename)
+        width, height = gts[i].shape
+        r_weight = np.loadtxt(os.path.join("./dataset/validation/r_weights", filename + "_GT_RWeights.dat"),
+                              dtype=np.float64).flatten()[:height * width].reshape(
+            (height, width))
+        p_weight = np.loadtxt(os.path.join("./dataset/validation/p_weights", filename + "_GT_PWeights.dat"),
+                              dtype=np.float64).flatten()[:height * width].reshape(
+            (height, width))
+
+        fmeasure, pfmeasure, psnr, drd = calculate_metrics(imgs[i], gts[i],r_weight, p_weight)
+        total_fmeasure += fmeasure
+        total_pf_measure += pfmeasure
+        total_psnr += psnr
+        total_drd += drd
+
+    total_fmeasure /= len(gts)
+    total_pf_measure /= len(gts)
+    total_psnr /= len(gts)
+    total_drd /= len(gts)
+
+    return total_fmeasure, total_pf_measure, total_psnr, total_drd
+
+
+class CustomMetricCallback(keras.callbacks.Callback):
+    def __init__(self, validation_generator):
+        super().__init__()
+        self.validation_generator = validation_generator
+
+    def on_epoch_end(self, epoch, logs=None):
+        logs = logs or {}
+        all_preds = []
+        all_trues = []
+        all_filenames = []
+
+        for i in range(len(self.validation_generator)):
+            batch = self.validation_generator[i]
+            if len(batch) == 3:
+                x, y, filenames = batch
+            else:
+                raise ValueError("Validation generator must return inputs, targets, and filenames.")
+
+            preds = self.model.predict(x)
+            all_preds.append(preds)
+            all_trues.append(y)
+            all_filenames.extend(filenames)
+
+        # Concatenate all batches
+        all_preds = np.concatenate(all_preds, axis=0)
+        all_trues = np.concatenate(all_trues, axis=0)
+
+        # Compute the custom metric using filenames
+        fmeasure, pfmeasure, psnr, drd = calculate_for_all(all_trues, all_preds, all_filenames)
+        logs["fmeasure"] = fmeasure
+        logs["pfmeasure"] = pfmeasure
+        logs["psnr"] = psnr
+        logs["drd"] = drd
