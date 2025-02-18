@@ -16,6 +16,7 @@ from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.utils import Sequence
 from model.unet import unet
 from utils.img_processing import *
+from tensorflow import keras
 
 class CustomMetricCallback(keras.callbacks.Callback):
     def __init__(self, validation_generator):
