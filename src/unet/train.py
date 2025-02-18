@@ -410,6 +410,7 @@ def main():
 
 
     print("finished in {0:.2f} seconds".format(time.time() - start_time))
+    wandb.finish()
     # Sometimes script freezes.
     sys.exit(0)
 
