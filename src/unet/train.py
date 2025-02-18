@@ -15,7 +15,6 @@ from tensorflow.keras.callbacks import (TensorBoard, Callback,ModelCheckpoint)
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.utils import Sequence
 from model.unet import unet
-from src.metrics.metrics import calculate_for_all
 from utils.img_processing import *
 
 
