@@ -182,15 +182,12 @@ class ParallelDataGenerator(Sequence):
 
         imgs_in = []
         imgs_gt = []
-        batch_filenames = []
 
         for i in batch_indices:
             img_in = cv2.imread(self.fnames_in[i], cv2.IMREAD_GRAYSCALE)
             img_gt = cv2.imread(self.fnames_gt[i], cv2.IMREAD_GRAYSCALE)
             imgs_in.append(img_in)
             imgs_gt.append(img_gt)
-            if self.return_filenames:
-                batch_filenames.append(self.fnames_in[i])
 
         # Apply augmentations if needed
         if self.augmentate:
@@ -202,10 +199,8 @@ class ParallelDataGenerator(Sequence):
         imgs_gt = np.array([normalize_gt(img) for img in imgs_gt])
         imgs_gt = imgs_gt[..., np.newaxis]  # Add channel dimension
 
-        if self.return_filenames:
-            return imgs_in, imgs_gt, batch_filenames
-        else:
-            return imgs_in, imgs_gt
+
+        return imgs_in, imgs_gt
 
 # class Visualisation(Callback):
 #     """Custom Keras callback for visualising training through GIFs."""

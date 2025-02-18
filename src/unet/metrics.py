@@ -190,7 +190,6 @@ class CustomMetricCallback(keras.callbacks.Callback):
         self.validation_generator = validation_generator
 
     def on_epoch_end(self, epoch, logs=None):
-
         print("Epoch ended. Now calculating metrics")
         logs = logs or {}
         all_preds = []
@@ -198,16 +197,16 @@ class CustomMetricCallback(keras.callbacks.Callback):
         all_filenames = []
 
         for i in range(len(self.validation_generator)):
-            batch = self.validation_generator[i]
-            if len(batch) == 3:
-                x, y, filenames = batch
-            else:
-                raise ValueError("Validation generator must return inputs, targets, and filenames.")
-
+            x, y = self.validation_generator[i]
             preds = self.model.predict(x)
             all_preds.append(preds)
             all_trues.append(y)
-            all_filenames.extend(filenames)
+
+            # Retrieve actual filenames based on current batch indices
+            batch_indices = self.validation_generator.idxs[
+                            i * self.validation_generator.batch_size: (i + 1) * self.validation_generator.batch_size]
+            batch_filenames = [self.validation_generator.fnames_in[idx] for idx in batch_indices]
+            all_filenames.extend(batch_filenames)
 
         # Concatenate all batches
         all_preds = np.concatenate(all_preds, axis=0)
