@@ -382,10 +382,10 @@ def main():
     assert (len(fnames_in) == len(fnames_gt))
 
     train_generator = ParallelDataGenerator(
-        fnames_in,
-        fnames_gt,
-        args.batchsize,
-        args.augmentate,
+        fnames_in=fnames_in,
+        fnames_gt=fnames_gt,
+        batch_size=args.batchsize,
+        augmentate=args.augmentate,
         workers=args.extraprocesses,
         max_queue_size=args.queuesize,
         use_multiprocessing=True
@@ -397,9 +397,10 @@ def main():
                  for i in range(len(os.listdir(os.path.join("validation_patches", 'in'))))]
 
     validation_generator = ParallelDataGenerator(
-        validation_in,
-        validation_gt, args.batchsize,
-        args.augmentate,
+        fnames_in=validation_in,
+        fnames_gt=validation_gt,
+        batch_size=args.batchsize,
+        augmentate=args.augmentate,
         workers=args.extraprocesses,
         max_queue_size=args.queuesize,
         use_multiprocessing=True
